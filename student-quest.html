@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StudentQuest</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0F1E38; }
+    /* Lucide icon sizing helper */
+    .lucide { display: inline-block; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <!-- API Key banner -->
+  <div id="api-banner" style="background:#1F345C;color:#F3F1E7;padding:10px 18px;font-family:sans-serif;font-size:13px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #2A3E63;">
+    <span>Anthropic API Key:</span>
+    <input id="api-key-input" type="password" placeholder="sk-ant-..." style="flex:1;max-width:340px;padding:5px 10px;border-radius:6px;border:1px solid #2A3E63;background:#0F1E38;color:#F3F1E7;font-size:13px;outline:none;" />
+    <button onclick="saveKey()" style="padding:5px 14px;border-radius:6px;background:#F2B84B;color:#0F1E38;font-weight:700;font-size:13px;border:none;cursor:pointer;">Save</button>
+    <span id="key-status" style="color:#3FBFAD;font-size:12px;"></span>
+    <span style="color:#8FA0C2;font-size:11px;margin-left:auto;">Key is stored in memory only — never sent anywhere except Anthropic.</span>
+  </div>
+  <div id="root"></div>
+
+  <script>
+    // ── API key helpers ──────────────────────────────────────────────────────
+    let _apiKey = "";
+    function saveKey() {
+      _apiKey = document.getElementById("api-key-input").value.trim();
+      document.getElementById("key-status").textContent = _apiKey ? "✓ Key saved" : "";
+    }
+    function getApiKey() { return _apiKey; }
+
+    // ── localStorage shim matching window.storage API used in the app ────────
+    window.storage = {
+      get: async (key) => {
+        const value = localStorage.getItem("sq_" + key);
+        return value ? { value } : null;
+      },
+      set: async (key, value) => {
+        localStorage.setItem("sq_" + key, value);
+      },
+    };
+
+    // ── Lucide icon shim: expose each icon as a React component ─────────────
+    // lucide UMD exposes icons as { createIcons, icons } — we wrap each into React
+    function makeLucideIcon(name) {
+      return function LucideIcon({ size = 24, color = "currentColor", className = "", strokeWidth = 2 }) {
+        const ref = React.useRef(null);
+        React.useEffect(() => {
+          if (ref.current) {
+            ref.current.innerHTML = "";
+            const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            el.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+            el.setAttribute("width", size);
+            el.setAttribute("height", size);
+            el.setAttribute("viewBox", "0 0 24 24");
+            el.setAttribute("fill", "none");
+            el.setAttribute("stroke", color);
+            el.setAttribute("stroke-width", strokeWidth);
+            el.setAttribute("stroke-linecap", "round");
+            el.setAttribute("stroke-linejoin", "round");
+            const iconDef = lucide.icons[name];
+            if (iconDef) {
+              const [_tag, attrs, children] = iconDef;
+              (children || []).forEach(([tag, a]) => {
+                const child = document.createElementNS("http://www.w3.org/2000/svg", tag);
+                Object.entries(a || {}).forEach(([k, v]) => child.setAttribute(k, v));
+                el.appendChild(child);
+              });
+            }
+            if (className) el.setAttribute("class", className);
+            ref.current.appendChild(el);
+          }
+        }, [size, color, className, strokeWidth]);
+        return React.createElement("span", { ref, style: { display: "inline-flex", alignItems: "center" } });
+      };
+    }
+    // Map camelCase component names → kebab-case lucide icon keys
+    const iconMap = {
+      Home: "home", Compass: "compass", Gamepad2: "gamepad-2", Flame: "flame",
+      Trophy: "trophy", Sparkles: "sparkles", Loader2: "loader-2",
+      CheckCircle2: "check-circle-2", XCircle: "x-circle", ChevronRight: "chevron-right",
+      Star: "star", Rocket: "rocket",
+    };
+    const Icons = {};
+    Object.entries(iconMap).forEach(([comp, key]) => { Icons[comp] = makeLucideIcon(key); });
+  </script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const { Home, Compass, Gamepad2, Flame, Trophy, Sparkles, Loader2,
+            CheckCircle2, XCircle, ChevronRight, Star, Rocket } = Icons;
+
+    const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');`;
+
+    const COLORS = {
+      bg: "#0F1E38", panel: "#17294A", panelLight: "#1F345C",
+      gold: "#F2B84B", teal: "#3FBFAD", coral: "#EF6F6C",
+      text: "#F3F1E7", muted: "#8FA0C2", line: "#2A3E63",
+    };
+
+    const SUBJECTS = ["Math", "Science", "Coding", "History", "English", "Geography"];
+    const INTEREST_OPTIONS = [
+      "Building things", "Solving puzzles", "Helping people", "Telling stories",
+      "Numbers & patterns", "Art & design", "Nature & animals", "Technology & gadgets",
+      "Leadership", "Performing",
+    ];
+    const WORK_STYLE_OPTIONS = ["Working with a team", "Working independently", "A mix of both"];
+    const VALUE_OPTIONS = ["Creativity", "Stability", "Helping others", "Adventure", "Money & growth", "Recognition"];
+
+    const BADGE_LIBRARY = [
+      { id: "first_quest", label: "First Quest", desc: "Completed your first game", threshold: 1 },
+      { id: "streak_3", label: "3-Day Spark", desc: "3 day streak", threshold: 3 },
+      { id: "streak_7", label: "Week Warrior", desc: "7 day streak", threshold: 7 },
+      { id: "xp_100", label: "Century Club", desc: "Earned 100 XP", threshold: 100 },
+      { id: "xp_300", label: "Rising Star", desc: "Earned 300 XP", threshold: 300 },
+      { id: "career_set", label: "Path Finder", desc: "Explored your career path", threshold: 1 },
+    ];
+
+    function todayStr() { return new Date().toISOString().slice(0, 10); }
+    function daysBetween(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
+    function levelFromXP(xp) { return Math.floor(xp / 100) + 1; }
+
+    async function callClaude(systemPrompt, userPrompt) {
+      const key = getApiKey();
+      if (!key) throw new Error("No API key set — enter your Anthropic API key in the banner above.");
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }],
+        }),
+      });
+      if (!response.ok) {
+        const errBody = await response.text();
+        throw new Error(`Anthropic API error ${response.status}: ${errBody}`);
+      }
+      const data = await response.json();
+      return (data.content || []).map((b) => (b.type === "text" ? b.text : "")).filter(Boolean).join("\n");
+    }
+
+    function extractJSON(text) {
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const start = cleaned.indexOf("{");
+      const arrStart = cleaned.indexOf("[");
+      let from = start;
+      if (arrStart !== -1 && (start === -1 || arrStart < start)) from = arrStart;
+      return JSON.parse(from >= 0 ? cleaned.slice(from) : cleaned);
+    }
+
+    const DEFAULT_PROFILE = { name: "", onboarded: false, xp: 0, streak: 0, lastVisit: null, badges: [], careerProfile: null, quizzesCompleted: 0 };
+
+    function StudentQuestApp() {
+      const [profile, setProfile] = useState(DEFAULT_PROFILE);
+      const [loadedFromStorage, setLoadedFromStorage] = useState(false);
+      const [tab, setTab] = useState("home");
+      const [nameDraft, setNameDraft] = useState("");
+      const [newBadgeToast, setNewBadgeToast] = useState(null);
+
+      useEffect(() => {
+        (async () => {
+          try {
+            const result = await window.storage.get("profile", false);
+            if (result && result.value) {
+              const p = JSON.parse(result.value);
+              const merged = { ...DEFAULT_PROFILE, ...p };
+              const applied = applyStreak(merged);
+              setProfile(applied);
+              persist(applied);
+            }
+          } catch (e) {}
+          setLoadedFromStorage(true);
+        })();
+      }, []);
+
+      function applyStreak(p) {
+        if (!p.lastVisit) return { ...p, streak: p.streak || 0, lastVisit: todayStr() };
+        const diff = daysBetween(p.lastVisit, todayStr());
+        if (diff === 0) return p;
+        if (diff === 1) return { ...p, streak: (p.streak || 0) + 1, lastVisit: todayStr() };
+        return { ...p, streak: 1, lastVisit: todayStr() };
+      }
+
+      async function persist(p) {
+        try { await window.storage.set("profile", JSON.stringify(p), false); }
+        catch (e) { console.error("Storage error:", e); }
+      }
+
+      function updateProfile(updater) {
+        setProfile((prev) => {
+          const next = typeof updater === "function" ? updater(prev) : updater;
+          const withBadges = checkBadges(next);
+          persist(withBadges);
+          return withBadges;
+        });
+      }
+
+      function checkBadges(p) {
+        const earned = new Set(p.badges || []);
+        let newest = null;
+        for (const b of BADGE_LIBRARY) {
+          if (earned.has(b.id)) continue;
+          let qualifies = false;
+          if (b.id === "first_quest" && p.quizzesCompleted >= 1) qualifies = true;
+          if (b.id === "streak_3" && p.streak >= 3) qualifies = true;
+          if (b.id === "streak_7" && p.streak >= 7) qualifies = true;
+          if (b.id === "xp_100" && p.xp >= 100) qualifies = true;
+          if (b.id === "xp_300" && p.xp >= 300) qualifies = true;
+          if (b.id === "career_set" && p.careerProfile) qualifies = true;
+          if (qualifies) { earned.add(b.id); newest = b; }
+        }
+        if (newest) setTimeout(() => setNewBadgeToast(newest), 50);
+        return { ...p, badges: Array.from(earned) };
+      }
+
+      function addXP(amount) { updateProfile((p) => ({ ...p, xp: p.xp + amount })); }
+
+      function finishOnboarding() {
+        if (!nameDraft.trim()) return;
+        updateProfile((p) => ({ ...p, name: nameDraft.trim(), onboarded: true, lastVisit: todayStr(), streak: 1 }));
+      }
+
+      if (!loadedFromStorage) {
+        return (
+          <div style={{ background: COLORS.bg, minHeight: "500px" }} className="flex items-center justify-center">
+            <Loader2 className="animate-spin" color={COLORS.gold} size={32} />
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ background: COLORS.bg, color: COLORS.text, fontFamily: "Manrope, sans-serif", minHeight: "600px" }} className="w-full rounded-lg overflow-hidden relative">
+          <style>{`
+            ${FONT_IMPORT}
+            .sq-serif { font-family: 'Fraunces', serif; }
+            .sq-scroll::-webkit-scrollbar { width: 6px; }
+            .sq-scroll::-webkit-scrollbar-thumb { background: ${COLORS.line}; border-radius: 3px; }
+            .sq-btn { transition: transform 0.12s ease, opacity 0.12s ease; cursor: pointer; }
+            .sq-btn:active { transform: scale(0.97); }
+            .sq-card { transition: border-color 0.15s ease; }
+            @keyframes sqPop { 0% { transform: translateY(8px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+            .sq-toast { animation: sqPop 0.25s ease; }
+            button { background: none; border: none; font-family: inherit; }
+          `}</style>
+
+          {!profile.onboarded ? (
+            <Onboarding nameDraft={nameDraft} setNameDraft={setNameDraft} onSubmit={finishOnboarding} />
+          ) : (
+            <div className="flex" style={{ minHeight: "600px" }}>
+              <SideRail tab={tab} setTab={setTab} profile={profile} />
+              <div className="flex-1 flex flex-col">
+                <TopBar profile={profile} />
+                <div className="flex-1 p-6 sq-scroll" style={{ overflowY: "auto", maxHeight: "620px" }}>
+                  {tab === "home"   && <HomeView   profile={profile} setTab={setTab} />}
+                  {tab === "career" && <CareerView profile={profile} updateProfile={updateProfile} />}
+                  {tab === "games"  && <GamesView  profile={profile} updateProfile={updateProfile} addXP={addXP} />}
+                  {tab === "boost"  && <BoostView  profile={profile} />}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {newBadgeToast && (
+            <div className="sq-toast absolute bottom-4 right-4 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg"
+              style={{ background: COLORS.panelLight, border: `1px solid ${COLORS.gold}` }}>
+              <Trophy size={20} color={COLORS.gold} />
+              <div>
+                <div className="text-sm font-bold" style={{ color: COLORS.gold }}>Badge earned: {newBadgeToast.label}</div>
+                <div className="text-xs" style={{ color: COLORS.muted }}>{newBadgeToast.desc}</div>
+              </div>
+              <button onClick={() => setNewBadgeToast(null)} className="text-xs ml-2" style={{ color: COLORS.muted }}>✕</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Onboarding({ nameDraft, setNameDraft, onSubmit }) {
+      return (
+        <div className="flex flex-col items-center justify-center p-10 text-center" style={{ minHeight: "600px" }}>
+          <Rocket size={40} color={COLORS.gold} />
+          <h1 className="sq-serif mt-4" style={{ fontSize: "34px", fontWeight: 600, color: COLORS.text }}>
+            Your learning quest starts here
+          </h1>
+          <p className="mt-3 max-w-md" style={{ color: COLORS.muted }}>
+            A study companion that maps out careers you might love, turns practice into games,
+            and keeps you going when motivation dips.
+          </p>
+          <div className="mt-8 flex gap-2">
+            <input
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onSubmit()}
+              placeholder="What should we call you?"
+              className="px-4 py-3 rounded-md outline-none"
+              style={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, color: COLORS.text, minWidth: "240px" }}
+            />
+            <button onClick={onSubmit} className="sq-btn px-5 py-3 rounded-md font-semibold"
+              style={{ background: COLORS.gold, color: COLORS.bg }}>Begin</button>
+          </div>
+        </div>
+      );
+    }
+
+    function SideRail({ tab, setTab, profile }) {
+      const items = [
+        { id: "home",   label: "Home",       icon: Home },
+        { id: "career", label: "Career Path", icon: Compass },
+        { id: "games",  label: "Play & Learn", icon: Gamepad2 },
+        { id: "boost",  label: "Boost",       icon: Sparkles },
+      ];
+      return (
+        <div className="flex flex-col justify-between p-4"
+          style={{ width: "180px", background: COLORS.panel, borderRight: `1px solid ${COLORS.line}` }}>
+          <div>
+            <div className="sq-serif px-2 mb-6" style={{ fontSize: "20px", color: COLORS.gold, fontWeight: 600 }}>Quest</div>
+            <div className="flex flex-col gap-1">
+              {items.map((it) => {
+                const Icon = it.icon;
+                const active = tab === it.id;
+                return (
+                  <button key={it.id} onClick={() => setTab(it.id)}
+                    className="sq-btn flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left"
+                    style={{ background: active ? COLORS.panelLight : "transparent",
+                             color: active ? COLORS.text : COLORS.muted, fontWeight: active ? 700 : 500 }}>
+                    <Icon size={16} color={active ? COLORS.gold : COLORS.muted} />
+                    {it.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="px-2 text-xs" style={{ color: COLORS.muted }}>
+            Level {levelFromXP(profile.xp)} · {profile.xp} XP
+          </div>
+        </div>
+      );
+    }
+
+    function TopBar({ profile }) {
+      const hour = new Date().getHours();
+      const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+      const xpInLevel = profile.xp % 100;
+      return (
+        <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+          <div>
+            <div className="sq-serif" style={{ fontSize: "22px", fontWeight: 600 }}>{greeting}, {profile.name}</div>
+            <div className="flex items-center gap-2 mt-1">
+              <div style={{ width: "160px", height: "6px", background: COLORS.panel, borderRadius: "3px", overflow: "hidden" }}>
+                <div style={{ width: `${xpInLevel}%`, height: "100%", background: COLORS.teal }} />
+              </div>
+              <span className="text-xs" style={{ color: COLORS.muted }}>{xpInLevel}/100 to next level</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-md" style={{ background: COLORS.panel }}>
+            <Flame size={18} color={profile.streak > 0 ? COLORS.coral : COLORS.muted} />
+            <span className="text-sm font-bold">{profile.streak} day{profile.streak === 1 ? "" : "s"}</span>
+          </div>
+        </div>
+      );
+    }
+
+    function HomeView({ profile, setTab }) {
+      return (
+        <div className="flex flex-col gap-6">
+          <div className="grid grid-cols-3 gap-4">
+            <StatCard label="Total XP"       value={profile.xp}               icon={Star}     color={COLORS.gold} />
+            <StatCard label="Quizzes played" value={profile.quizzesCompleted} icon={Gamepad2} color={COLORS.teal} />
+            <StatCard label="Badges"         value={profile.badges.length}    icon={Trophy}   color={COLORS.coral} />
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <NavCard title="Find your path" desc={profile.careerProfile ? "Revisit your career suggestions" : "Take a 2-minute quiz to see careers that fit you"} onClick={() => setTab("career")} color={COLORS.teal} />
+            <NavCard title="Play a game"    desc="Turn practice into points and levels"      onClick={() => setTab("games")}  color={COLORS.gold} />
+            <NavCard title="Need a boost?"  desc="Get a quick nudge when motivation dips"   onClick={() => setTab("boost")}  color={COLORS.coral} />
+          </div>
+          <div>
+            <div className="text-sm font-bold mb-3" style={{ color: COLORS.muted }}>YOUR BADGES</div>
+            {profile.badges.length === 0 ? (
+              <div className="text-sm" style={{ color: COLORS.muted }}>No badges yet — play a game or explore a career path to earn your first one.</div>
+            ) : (
+              <div className="flex flex-wrap gap-3">
+                {profile.badges.map((id) => {
+                  const b = BADGE_LIBRARY.find((x) => x.id === id);
+                  if (!b) return null;
+                  return (
+                    <div key={id} className="flex items-center gap-2 px-3 py-2 rounded-md"
+                      style={{ background: COLORS.panel, border: `1px solid ${COLORS.line}` }}>
+                      <Trophy size={14} color={COLORS.gold} />
+                      <span className="text-xs font-semibold">{b.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function StatCard({ label, value, icon: Icon, color }) {
+      return (
+        <div className="p-4 rounded-lg" style={{ background: COLORS.panel, border: `1px solid ${COLORS.line}` }}>
+          <Icon size={18} color={color} />
+          <div className="sq-serif mt-2" style={{ fontSize: "26px", fontWeight: 600 }}>{value}</div>
+          <div className="text-xs" style={{ color: COLORS.muted }}>{label}</div>
+        </div>
+      );
+    }
+
+    function NavCard({ title, desc, onClick, color }) {
+      return (
+        <button onClick={onClick} className="sq-btn sq-card text-left p-4 rounded-lg w-full"
+          style={{ background: COLORS.panel, border: `1px solid ${COLORS.line}` }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = color)}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = COLORS.line)}>
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-sm">{title}</span>
+            <ChevronRight size={16} color={color} />
+          </div>
+          <div className="text-xs mt-1" style={{ color: COLORS.muted }}>{desc}</div>
+        </button>
+      );
+    }
+
+    function CareerView({ profile, updateProfile }) {
+      const [step, setStep] = useState(profile.careerProfile ? "result" : "intake");
+      const [interests, setInterests] = useState([]);
+      const [workStyle, setWorkStyle] = useState("");
+      const [values, setValues] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const result = profile.careerProfile;
+
+      function toggle(list, setList, item, max) {
+        setList((prev) => {
+          if (prev.includes(item)) return prev.filter((x) => x !== item);
+          if (max && prev.length >= max) return prev;
+          return [...prev, item];
+        });
+      }
+
+      async function submit() {
+        setLoading(true); setError(null);
+        try {
+          const system = `You are a friendly career-guidance agent for students. Suggest careers based on interests, work style, and values. Always frame suggestions as options to explore, not decisions. Respond ONLY with valid JSON, no preamble, no markdown fences.`;
+          const user = `Interests: ${interests.join(", ")}\nPreferred work style: ${workStyle}\nWhat they value: ${values.join(", ")}\n\nReturn JSON exactly in this shape:\n{"careers":[{"title":"","why":"one sentence tying it to their inputs","roadmap":["step 1","step 2","step 3","step 4"]}]} with exactly 3 careers.`;
+          const text = await callClaude(system, user);
+          const parsed = extractJSON(text);
+          updateProfile((p) => ({ ...p, careerProfile: { interests, workStyle, values, careers: parsed.careers } }));
+          setStep("result");
+        } catch (e) {
+          setError(e.message || "Couldn't generate suggestions right now. Try again.");
+        } finally { setLoading(false); }
+      }
+
+      if (step === "result" && result) {
+        return (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="sq-serif" style={{ fontSize: "22px", fontWeight: 600 }}>Careers worth exploring</div>
+              <button onClick={() => setStep("intake")} className="text-xs font-semibold" style={{ color: COLORS.teal }}>Retake quiz</button>
+            </div>
+            <div className="flex flex-col gap-4">
+              {result.careers.map((c, i) => (
+                <div key={i} className="p-4 rounded-lg" style={{ background: COLORS.panel, border: `1px solid ${COLORS.line}` }}>
+                  <div className="font-bold" style={{ color: COLORS.teal }}>{c.title}</div>
+                  <div className="text-sm mt-1" style={{ color: COLORS.text }}>{c.why}</div>
+                  <div className="mt-3 flex flex-col gap-1">
+                    {c.roadmap.map((r, j) => (
+                      <div key={j} className="flex items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
+                        <div style={{ width: "5px", height: "5px", borderRadius: "50%", background: COLORS.gold }} />{r}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="max-w-lg">
+          <div className="sq-serif mb-1" style={{ fontSize: "22px", fontWeight: 600 }}>What sounds like you?</div>
+          <div className="text-sm mb-4" style={{ color: COLORS.muted }}>Pick up to 3 things you enjoy.</div>
+          <ChipGroup options={INTEREST_OPTIONS} selected={interests} onToggle={(o) => toggle(interests, setInterests, o, 3)} />
+
+          <div className="sq-serif mt-6 mb-1" style={{ fontSize: "18px", fontWeight: 600 }}>How do you like to work?</div>
+          <ChipGroup options={WORK_STYLE_OPTIONS} selected={[workStyle]} onToggle={(o) => setWorkStyle((prev) => (prev === o ? "" : o))} single />
+
+          <div className="sq-serif mt-6 mb-1" style={{ fontSize: "18px", fontWeight: 600 }}>What matters most to you?</div>
+          <ChipGroup options={VALUE_OPTIONS} selected={values} onToggle={(o) => toggle(values, setValues, o, 2)} />
+
+          {error && <div className="text-xs mt-3" style={{ color: COLORS.coral }}>{error}</div>}
+
+          <button disabled={interests.length === 0 || !workStyle || values.length === 0 || loading} onClick={submit}
+            className="sq-btn mt-6 px-5 py-3 rounded-md font-semibold flex items-center gap-2"
+            style={{ background: COLORS.teal, color: COLORS.bg, opacity: interests.length === 0 || !workStyle || values.length === 0 ? 0.5 : 1 }}>
+            {loading ? <Loader2 size={16} className="animate-spin" /> : null}
+            {loading ? "Thinking..." : "See my paths"}
+          </button>
+        </div>
+      );
+    }
+
+    function ChipGroup({ options, selected, onToggle }) {
+      return (
+        <div className="flex flex-wrap gap-2">
+          {options.map((o) => {
+            const active = selected.includes(o);
+            return (
+              <button key={o} onClick={() => onToggle(o)}
+                className="sq-btn px-3 py-2 rounded-full text-xs font-semibold"
+                style={{ background: active ? COLORS.gold : COLORS.panel, color: active ? COLORS.bg : COLORS.muted,
+                         border: `1px solid ${active ? COLORS.gold : COLORS.line}` }}>
+                {o}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function GamesView({ profile, updateProfile, addXP }) {
+      const [subject, setSubject] = useState(null);
+      const [difficulty, setDifficulty] = useState("medium");
+      const [questions, setQuestions] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const [idx, setIdx] = useState(0);
+      const [score, setScore] = useState(0);
+      const [selected, setSelected] = useState(null);
+      const [revealed, setRevealed] = useState(false);
+      const [finished, setFinished] = useState(false);
+
+      async function startGame(subj) {
+        setSubject(subj); setLoading(true); setError(null);
+        setFinished(false); setScore(0); setIdx(0);
+        try {
+          const system = `You are a game-design agent that creates short multiple-choice quiz games for students. Keep questions clear and age-appropriate. Respond ONLY with valid JSON, no preamble, no markdown fences.`;
+          const user = `Subject: ${subj}\nDifficulty: ${difficulty}\n\nReturn JSON exactly in this shape:\n{"questions":[{"q":"","options":["","","",""],"correctIndex":0,"explain":"one short sentence"}]} with exactly 5 questions.`;
+          const text = await callClaude(system, user);
+          const parsed = extractJSON(text);
+          setQuestions(parsed.questions);
+        } catch (e) {
+          setError(e.message || "Couldn't build the quiz right now. Try again.");
+          setSubject(null);
+        } finally { setLoading(false); }
+      }
+
+      function pick(i) {
+        if (revealed) return;
+        setSelected(i); setRevealed(true);
+        if (i === questions[idx].correctIndex) setScore((s) => s + 1);
+      }
+
+      function next() {
+        if (idx + 1 < questions.length) {
+          setIdx((n) => n + 1); setSelected(null); setRevealed(false);
+        } else {
+          const finalScore = score + (selected === questions[idx].correctIndex ? 1 : 0);
+          addXP(finalScore * 10);
+          updateProfile((p) => ({ ...p, quizzesCompleted: p.quizzesCompleted + 1 }));
+          setScore(finalScore);
+          setFinished(true);
+        }
+      }
+
+      function reset() { setSubject(null); setQuestions(null); setFinished(false); }
+
+      if (!subject) {
+        return (
+          <div>
+            <div className="sq-serif mb-1" style={{ fontSize: "22px", fontWeight: 600 }}>Pick a subject to play</div>
+            <div className="text-sm mb-4" style={{ color: COLORS.muted }}>5 quick questions. 10 XP per correct answer.</div>
+            <div className="flex gap-2 mb-6">
+              {["easy", "medium", "hard"].map((d) => (
+                <button key={d} onClick={() => setDifficulty(d)}
+                  className="sq-btn px-3 py-1.5 rounded-full text-xs font-semibold capitalize"
+                  style={{ background: difficulty === d ? COLORS.coral : COLORS.panel,
+                           color: difficulty === d ? COLORS.bg : COLORS.muted,
+                           border: `1px solid ${difficulty === d ? COLORS.coral : COLORS.line}` }}>
+                  {d}
+                </button>
+              ))}
+            </div>
+            {error && <div className="text-xs mb-3" style={{ color: COLORS.coral }}>{error}</div>}
+            <div className="grid grid-cols-3 gap-3">
+              {SUBJECTS.map((s) => (
+                <button key={s} onClick={() => startGame(s)} disabled={loading}
+                  className="sq-btn sq-card p-4 rounded-lg text-left"
+                  style={{ background: COLORS.panel, border: `1px solid ${COLORS.line}` }}>
+                  <Gamepad2 size={18} color={COLORS.gold} />
+                  <div className="font-bold text-sm mt-2">{s}</div>
+                </button>
+              ))}
+            </div>
+            {loading && (
+              <div className="flex items-center gap-2 mt-4 text-sm" style={{ color: COLORS.muted }}>
+                <Loader2 size={16} className="animate-spin" /> Building your quiz...
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      if (finished) {
+        return (
+          <div className="flex flex-col items-center text-center p-8">
+            <Trophy size={36} color={COLORS.gold} />
+            <div className="sq-serif mt-4" style={{ fontSize: "26px", fontWeight: 600 }}>{score}/{questions.length} correct</div>
+            <div className="text-sm mt-1" style={{ color: COLORS.muted }}>+{score * 10} XP earned</div>
+            <button onClick={reset} className="sq-btn mt-6 px-5 py-3 rounded-md font-semibold"
+              style={{ background: COLORS.gold, color: COLORS.bg }}>Play another</button>
+          </div>
+        );
+      }
+
+      const q = questions[idx];
+      return (
+        <div className="max-w-lg">
+          <div className="text-xs mb-2" style={{ color: COLORS.muted }}>{subject} · Question {idx + 1} of {questions.length}</div>
+          <div className="sq-serif mb-4" style={{ fontSize: "20px", fontWeight: 600 }}>{q.q}</div>
+          <div className="flex flex-col gap-2">
+            {q.options.map((opt, i) => {
+              let bg = COLORS.panel, border = COLORS.line;
+              if (revealed) {
+                if (i === q.correctIndex)                   { bg = "rgba(63,191,173,0.15)"; border = COLORS.teal; }
+                else if (i === selected)                    { bg = "rgba(239,111,108,0.15)"; border = COLORS.coral; }
+              }
+              return (
+                <button key={i} onClick={() => pick(i)}
+                  className="sq-btn flex items-center justify-between px-4 py-3 rounded-md text-sm text-left w-full"
+                  style={{ background: bg, border: `1px solid ${border}`, color: COLORS.text }}>
+                  {opt}
+                  {revealed && i === q.correctIndex && <CheckCircle2 size={16} color={COLORS.teal} />}
+                  {revealed && i === selected && i !== q.correctIndex && <XCircle size={16} color={COLORS.coral} />}
+                </button>
+              );
+            })}
+          </div>
+          {revealed && (
+            <div className="mt-4 p-3 rounded-md text-xs" style={{ background: COLORS.panel, color: COLORS.muted }}>{q.explain}</div>
+          )}
+          {revealed && (
+            <button onClick={next} className="sq-btn mt-4 px-5 py-2.5 rounded-md font-semibold text-sm"
+              style={{ background: COLORS.gold, color: COLORS.bg }}>
+              {idx + 1 < questions.length ? "Next question" : "See results"}
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    function BoostView({ profile }) {
+      const [message, setMessage] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+
+      async function getBoost() {
+        setLoading(true); setError(null);
+        try {
+          const system = `You are a warm, genuine motivation coach for a student. Never use guilt, comparison to others, or manipulative urgency. Keep it short — 2 to 3 sentences, plain language, specific to what they've actually done.`;
+          const careerNote = profile.careerProfile
+            ? `They're exploring a path toward: ${profile.careerProfile.careers?.[0]?.title || "a new career"}.`
+            : "They haven't picked a career path yet.";
+          const user = `Student name: ${profile.name}\nXP: ${profile.xp}\nStreak: ${profile.streak} days\nQuizzes completed: ${profile.quizzesCompleted}\nBadges: ${profile.badges.length}\n${careerNote}\n\nWrite a short encouraging message for them right now.`;
+          const text = await callClaude(system, user);
+          setMessage(text.trim());
+        } catch (e) {
+          setError(e.message || "Couldn't reach the coach right now. Try again in a moment.");
+        } finally { setLoading(false); }
+      }
+
+      return (
+        <div className="max-w-lg flex flex-col items-start">
+          <div className="sq-serif mb-1" style={{ fontSize: "22px", fontWeight: 600 }}>A quick boost</div>
+          <div className="text-sm mb-6" style={{ color: COLORS.muted }}>Grounded in what you've actually done — not empty hype.</div>
+
+          {message && (
+            <div className="p-4 rounded-lg mb-4 w-full" style={{ background: COLORS.panel, border: `1px solid ${COLORS.gold}` }}>
+              <Sparkles size={16} color={COLORS.gold} />
+              <div className="text-sm mt-2" style={{ color: COLORS.text }}>{message}</div>
+            </div>
+          )}
+          {error && <div className="text-xs mb-3" style={{ color: COLORS.coral }}>{error}</div>}
+
+          <button onClick={getBoost} disabled={loading}
+            className="sq-btn px-5 py-3 rounded-md font-semibold flex items-center gap-2"
+            style={{ background: COLORS.coral, color: COLORS.bg }}>
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+            {loading ? "Thinking..." : message ? "Get another" : "Get a boost"}
+          </button>
+
+          <div className="mt-8 w-full">
+            <div className="text-sm font-bold mb-3" style={{ color: COLORS.muted }}>STREAK</div>
+            <div className="flex gap-1.5">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} style={{ width: "28px", height: "28px", borderRadius: "6px",
+                  background: i < Math.min(profile.streak, 7) ? COLORS.coral : COLORS.panel,
+                  border: `1px solid ${COLORS.line}` }} />
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<StudentQuestApp />);
+  </script>
+</body>
+</html>
